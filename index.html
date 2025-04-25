@@ -161,10 +161,6 @@
     </div>
     
     <script>
-        // Canvas for image processing
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
         // Elements
         const sceneImage = document.getElementById('scene-image');
         const magnifyingGlass = document.getElementById('magnifying-glass');
@@ -290,47 +286,120 @@
             loadingText.textContent = "Analyzing...";
             
             try {
-                // Calculate relative position in the image (as percentages)
-                const relativeX = (x / window.innerWidth * 100).toFixed(1);
-                const relativeY = (y / window.innerHeight * 100).toFixed(1);
+                // Get relative coordinates (as percentage of image dimensions)
+                const relX = Math.round((x / window.innerWidth) * 100);
+                const relY = Math.round((y / window.innerHeight) * 100);
                 
-                // Analyze the image with LLM
+                // Describe the area being magnified
+                const areaDescription = `the area located at approximately ${relX}% from the left and ${relY}% from the top of the image`;
+                
+                // Instead of using canvas, we'll describe the position and use the original scene description
                 loadingText.textContent = "Analyzing object...";
-                const analyzeCompletion = await websim.chat.completions.create({
-                    messages: [
-                        ...conversationHistory,
-                        {
+                
+                // First attempt - try with direct approach
+                try {
+                    const analyzeCompletion = await websim.chat.completions.create({
+                        messages: [
+                            ...conversationHistory,
+                            {
+                                role: "user",
+                                content: `I'm examining ${areaDescription} of the scene you described. Based on your detailed scene description, what object am I likely looking at in this position? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
+                            }
+                        ]
+                    });
+                    
+                    const analysis = analyzeCompletion.content;
+                    conversationHistory.push({
+                        role: "user",
+                        content: `Analyze the magnified portion at ${areaDescription}.`
+                    });
+                    conversationHistory.push({
+                        role: "assistant",
+                        content: analysis
+                    });
+                    
+                    // Generate microscopic view based on analysis
+                    loadingText.textContent = "Generating microscopic view...";
+                    const microscopicResult = await websim.imageGen({
+                        prompt: `Microscopic extreme close-up view of ${analysis}. Scientific, detailed, high magnification.`,
+                        aspect_ratio: "1:1"
+                    });
+                    
+                    // Display the microscopic view
+                    microscopicImage.onload = () => {
+                        loading.style.display = "none";
+                        microscopicViewContainer.style.display = "flex";
+                        isGenerating = false;
+                    };
+                    microscopicImage.src = microscopicResult.url;
+                    microscopicDescription.textContent = analysis;
+                    
+                } catch (error) {
+                    console.error("First attempt failed:", error);
+                    
+                    // Fallback approach - try with more context about the original scene
+                    try {
+                        const fallbackCompletion = await websim.chat.completions.create({
+                            messages: [
+                                {
+                                    role: "system",
+                                    content: "You are a microscopy expert who can analyze described areas in images and explain what they would look like under high magnification."
+                                },
+                                {
+                                    role: "user",
+                                    content: `The scene is: ${currentScene}\n\nI'm looking at ${areaDescription} of this scene. What object am I likely looking at? Describe in detail what this would look like under a microscope with extreme magnification. Include textures, structures, cells, or microscopic elements.`
+                                }
+                            ]
+                        });
+                        
+                        const analysis = fallbackCompletion.content;
+                        conversationHistory.push({
                             role: "user",
-                            content: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. Based on the scene description, what object am I likely looking at in this position? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
+                            content: `Analyze the magnified portion at ${areaDescription}.`
+                        });
+                        conversationHistory.push({
+                            role: "assistant",
+                            content: analysis
+                        });
+                        
+                        // Generate microscopic view based on analysis
+                        loadingText.textContent = "Generating microscopic view...";
+                        const microscopicResult = await websim.imageGen({
+                            prompt: `Microscopic extreme close-up view of ${analysis}. Scientific, detailed, high magnification.`,
+                            aspect_ratio: "1:1"
+                        });
+                        
+                        // Display the microscopic view
+                        microscopicImage.onload = () => {
+                            loading.style.display = "none";
+                            microscopicViewContainer.style.display = "flex";
+                            isGenerating = false;
+                        };
+                        microscopicImage.src = microscopicResult.url;
+                        microscopicDescription.textContent = analysis;
+                    } catch (secondError) {
+                        // If all else fails, use a generic microscopic view based on the scene
+                        console.error("Second attempt failed:", secondError);
+                        
+                        try {
+                            const genericAnalysis = `a small portion of the scene (${currentScene.substring(0, 100)}...)`;
+                            const microscopicResult = await websim.imageGen({
+                                prompt: `Microscopic extreme close-up view of something in this scene. Scientific, detailed, high magnification.`,
+                                aspect_ratio: "1:1"
+                            });
+                            
+                            microscopicImage.onload = () => {
+                                loading.style.display = "none";
+                                microscopicViewContainer.style.display = "flex";
+                                isGenerating = false;
+                            };
+                            microscopicImage.src = microscopicResult.url;
+                            microscopicDescription.textContent = "A microscopic view of this portion of the scene, revealing details invisible to the naked eye.";
+                        } catch (finalError) {
+                            throw new Error("All attempts failed: " + finalError.message);
                         }
-                    ]
-                });
-                
-                const analysis = analyzeCompletion.content;
-                conversationHistory.push({
-                    role: "user",
-                    content: `Analyze the object at position ${relativeX}%, ${relativeY}% of the scene.`
-                });
-                conversationHistory.push({
-                    role: "assistant",
-                    content: analysis
-                });
-                
-                // Generate microscopic view based on analysis
-                loadingText.textContent = "Generating microscopic view...";
-                const microscopicResult = await websim.imageGen({
-                    prompt: `Microscopic extreme close-up view of ${analysis}. Scientific, detailed, high magnification.`,
-                    aspect_ratio: "1:1"
-                });
-                
-                // Display the microscopic view
-                microscopicImage.onload = () => {
-                    loading.style.display = "none";
-                    microscopicViewContainer.style.display = "flex";
-                    isGenerating = false;
-                };
-                microscopicImage.src = microscopicResult.url;
-                microscopicDescription.textContent = analysis;
+                    }
+                }
                 
             } catch (error) {
                 console.error("Error analyzing and generating microscopic view:", error);
