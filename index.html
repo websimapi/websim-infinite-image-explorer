@@ -165,12 +165,39 @@
             left: -9999px;
             pointer-events: none;
         }
+        
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            max-width: 300px;
+            z-index: 15;
+        }
+        
+        #error-message {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background-color: rgba(255, 50, 50, 0.8);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            max-width: 300px;
+            z-index: 25;
+            display: none;
+        }
     </style>
 </head>
 <body>
     <div id="app">
         <div id="scene-container">
-            <img id="scene-image" alt="Generated scene">
+            <img id="scene-image" alt="Generated scene" crossorigin="anonymous">
         </div>
         
         <div id="magnifying-glass">
@@ -194,7 +221,12 @@
             <span id="loading-text">Generating scene...</span>
         </div>
         
-        <!-- Add hidden canvas for capturing the magnified area -->
+        <div id="instructions">
+            Left-click to analyze what you're looking at. Right-click to see a microscopic view.
+        </div>
+        
+        <div id="error-message"></div>
+        
         <canvas id="capture-canvas"></canvas>
     </div>
     
@@ -214,6 +246,7 @@
         const closeAnalysis = document.getElementById('close-analysis');
         const captureCanvas = document.getElementById('capture-canvas');
         const ctx = captureCanvas.getContext('2d');
+        const errorMessage = document.getElementById('error-message');
         
         // State
         let currentScene = '';
@@ -222,6 +255,15 @@
         let conversationHistory = [];
         let currentMouseX = 0;
         let currentMouseY = 0;
+        let originalImageUrl = '';
+        
+        // CORS proxies to try
+        const corsProxies = [
+            '', // Try direct access first
+            'https://cors-anywhere.herokuapp.com/',
+            'https://api.allorigins.win/raw?url=',
+            'https://corsproxy.io/?'
+        ];
         
         // Initialize the app
         window.addEventListener('DOMContentLoaded', async () => {
@@ -267,17 +309,78 @@
                     aspect_ratio: "16:9"
                 });
                 
-                // Load the generated image
-                sceneImage.onload = () => {
-                    loading.style.display = "none";
-                    magnifyingGlass.style.display = "block";
-                };
-                sceneImage.src = result.url;
+                originalImageUrl = result.url;
+                
+                // Try to load the image with CORS enabled
+                await loadImageWithCORSProxy(result.url);
                 
             } catch (error) {
                 console.error("Error generating scene:", error);
                 loadingText.textContent = "Error: " + error.message;
+                showError("Failed to generate initial scene: " + error.message);
             }
+        }
+        
+        // Load image with CORS proxy with fallback
+        async function loadImageWithCORSProxy(url) {
+            let loadSuccess = false;
+            let lastError = null;
+            
+            // Try each proxy in sequence
+            for (let i = 0; i < corsProxies.length; i++) {
+                try {
+                    const proxyUrl = corsProxies[i] + url;
+                    loadingText.textContent = `Trying to load image (method ${i+1}/${corsProxies.length})...`;
+                    
+                    // Create a promise to track image loading
+                    await new Promise((resolve, reject) => {
+                        sceneImage.onload = () => {
+                            loadSuccess = true;
+                            resolve();
+                        };
+                        sceneImage.onerror = (err) => {
+                            reject(new Error(`Failed to load with proxy ${i+1}`));
+                        };
+                        
+                        // Set crossorigin attribute and src
+                        sceneImage.crossOrigin = "anonymous";
+                        sceneImage.src = proxyUrl;
+                    });
+                    
+                    // If we get here, loading succeeded
+                    console.log(`Successfully loaded image with proxy method ${i+1}`);
+                    loading.style.display = "none";
+                    magnifyingGlass.style.display = "block";
+                    return;
+                    
+                } catch (error) {
+                    console.error(`Error with proxy ${i+1}:`, error);
+                    lastError = error;
+                    // Continue to next proxy
+                }
+            }
+            
+            // If all proxies failed, use descriptive analysis instead
+            if (!loadSuccess) {
+                loading.style.display = "none";
+                magnifyingGlass.style.display = "block";
+                
+                // Regular loading for visual display only
+                sceneImage.crossOrigin = "anonymous";
+                sceneImage.src = url;
+                
+                showError("CORS restrictions detected. Using AI-only analysis mode.");
+                console.warn("All CORS proxies failed. Using AI-only analysis mode:", lastError);
+            }
+        }
+        
+        // Show error message
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = "block";
+            setTimeout(() => {
+                errorMessage.style.display = "none";
+            }, 5000);
         }
         
         // Setup the magnifying glass functionality
@@ -331,40 +434,74 @@
             magnifiedContent.style.backgroundPosition = `${posX}px ${posY}px`;
         }
         
-        // Capture the circular magnified area
-        function captureMagnifiedArea() {
-            const glassDiameter = magnifyingGlass.offsetWidth;
+        // Get descriptive location of where user is looking
+        function getPositionDescription(x, y) {
+            // Calculate relative position in the image (as percentages)
+            const relativeX = (x / window.innerWidth * 100).toFixed(1);
+            const relativeY = (y / window.innerHeight * 100).toFixed(1);
             
-            // Set canvas size to match the magnifying glass
-            captureCanvas.width = glassDiameter;
-            captureCanvas.height = glassDiameter;
+            // Create descriptive location
+            return {
+                relativeX,
+                relativeY,
+                description: `approximately ${relativeX}% from the left and ${relativeY}% from the top of the image`
+            };
+        }
+        
+        // Try to capture the magnified area with multiple methods
+        async function safeCaptureMagnifiedArea() {
+            const position = getPositionDescription(currentMouseX, currentMouseY);
             
-            // Clear previous content
-            ctx.clearRect(0, 0, glassDiameter, glassDiameter);
-            
-            // Create a circular clipping path
-            ctx.beginPath();
-            ctx.arc(glassDiameter/2, glassDiameter/2, glassDiameter/2, 0, Math.PI * 2);
-            ctx.closePath();
-            ctx.clip();
-            
-            // Calculate source position and dimensions
-            const sourceX = currentMouseX - glassDiameter/2/zoomScale;
-            const sourceY = currentMouseY - glassDiameter/2/zoomScale;
-            const sourceWidth = glassDiameter/zoomScale;
-            const sourceHeight = glassDiameter/zoomScale;
-            
-            // Draw the image portion
-            ctx.drawImage(
-                sceneImage,
-                Math.max(0, sourceX), Math.max(0, sourceY),
-                Math.min(sourceWidth, sceneImage.width - sourceX), 
-                Math.min(sourceHeight, sceneImage.height - sourceY),
-                0, 0, glassDiameter, glassDiameter
-            );
-            
-            // Return the data URL
-            return captureCanvas.toDataURL('image/png');
+            try {
+                // Method 1: Try canvas capture if CORS allows
+                const glassDiameter = magnifyingGlass.offsetWidth;
+                
+                // Set canvas size to match the magnifying glass
+                captureCanvas.width = glassDiameter;
+                captureCanvas.height = glassDiameter;
+                
+                // Clear previous content
+                ctx.clearRect(0, 0, glassDiameter, glassDiameter);
+                
+                // Create a circular clipping path
+                ctx.beginPath();
+                ctx.arc(glassDiameter/2, glassDiameter/2, glassDiameter/2, 0, Math.PI * 2);
+                ctx.closePath();
+                ctx.clip();
+                
+                // Calculate source position and dimensions
+                const sourceX = currentMouseX - glassDiameter/2/zoomScale;
+                const sourceY = currentMouseY - glassDiameter/2/zoomScale;
+                const sourceWidth = glassDiameter/zoomScale;
+                const sourceHeight = glassDiameter/zoomScale;
+                
+                // Draw the image portion
+                ctx.drawImage(
+                    sceneImage,
+                    Math.max(0, sourceX), Math.max(0, sourceY),
+                    Math.min(sourceWidth, sceneImage.width - sourceX), 
+                    Math.min(sourceHeight, sceneImage.height - sourceY),
+                    0, 0, glassDiameter, glassDiameter
+                );
+                
+                // Try to get data URL - this may fail due to CORS
+                const dataUrl = captureCanvas.toDataURL('image/png');
+                return { 
+                    success: true, 
+                    dataUrl,
+                    position
+                };
+            }
+            catch (error) {
+                console.warn("Canvas capture failed:", error);
+                
+                // Method 2: Fall back to position-based description only
+                return { 
+                    success: false, 
+                    position, 
+                    error
+                };
+            }
         }
         
         // Analyze current view without showing microscopic image (left click)
@@ -374,12 +511,25 @@
             loadingText.textContent = "Analyzing...";
             
             try {
-                // Capture the magnified area
-                const magnifiedImageDataUrl = captureMagnifiedArea();
+                // Try to capture the magnified area
+                const captureResult = await safeCaptureMagnifiedArea();
+                const position = captureResult.position;
                 
-                // Calculate relative position in the image (as percentages)
-                const relativeX = (x / window.innerWidth * 100).toFixed(1);
-                const relativeY = (y / window.innerHeight * 100).toFixed(1);
+                // Prepare message content array
+                let messageContent = [
+                    {
+                        type: "text",
+                        text: `I'm examining a part of the scene at ${position.description}. Based on the overall scene description (${currentScene}) and this position, what object am I likely looking at in this magnified view? Provide a brief analysis of what you might see here.`
+                    }
+                ];
+                
+                // Add image if capture was successful
+                if (captureResult.success) {
+                    messageContent.push({
+                        type: "image_url",
+                        image_url: { url: captureResult.dataUrl }
+                    });
+                }
                 
                 // Analyze the image at position with LLM
                 const analyzeCompletion = await websim.chat.completions.create({
@@ -387,16 +537,7 @@
                         ...conversationHistory,
                         {
                             role: "user",
-                            content: [
-                                {
-                                    type: "text",
-                                    text: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. What object am I looking at in this magnified view? Provide a brief analysis of what you see.`
-                                },
-                                {
-                                    type: "image_url",
-                                    image_url: { url: magnifiedImageDataUrl }
-                                }
-                            ]
+                            content: messageContent
                         }
                     ]
                 });
@@ -404,7 +545,7 @@
                 const analysis = analyzeCompletion.content;
                 conversationHistory.push({
                     role: "user",
-                    content: `Analyze the object at position ${relativeX}%, ${relativeY}% of the scene.`
+                    content: `Analyze the object at position ${position.relativeX}%, ${position.relativeY}% of the scene.`
                 });
                 conversationHistory.push({
                     role: "assistant",
@@ -424,25 +565,39 @@
                 console.error("Error analyzing view:", error);
                 loadingText.textContent = "Error: " + error.message;
                 isGenerating = false;
+                showError("Analysis failed: " + error.message);
                 setTimeout(() => {
                     loading.style.display = "none";
                 }, 2000);
             }
         }
         
-        // Take a snapshot of the magnified area and analyze it with microscopic view
+        // Analyze and generate microscopic view
         async function analyzeAndGenerateMicroscopicView(x, y) {
             isGenerating = true;
             loading.style.display = "flex";
             loadingText.textContent = "Analyzing...";
             
             try {
-                // Capture the magnified area
-                const magnifiedImageDataUrl = captureMagnifiedArea();
+                // Try to capture the magnified area
+                const captureResult = await safeCaptureMagnifiedArea();
+                const position = captureResult.position;
                 
-                // Calculate relative position in the image (as percentages)
-                const relativeX = (x / window.innerWidth * 100).toFixed(1);
-                const relativeY = (y / window.innerHeight * 100).toFixed(1);
+                // Prepare message content array
+                let messageContent = [
+                    {
+                        type: "text",
+                        text: `I'm examining a part of the scene at ${position.description}. Based on the overall scene description (${currentScene}) and this position, what object am I likely looking at? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
+                    }
+                ];
+                
+                // Add image if capture was successful
+                if (captureResult.success) {
+                    messageContent.push({
+                        type: "image_url",
+                        image_url: { url: captureResult.dataUrl }
+                    });
+                }
                 
                 // Analyze the image with LLM
                 loadingText.textContent = "Analyzing object...";
@@ -451,16 +606,7 @@
                         ...conversationHistory,
                         {
                             role: "user",
-                            content: [
-                                {
-                                    type: "text",
-                                    text: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. What object am I looking at in this magnified view? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
-                                },
-                                {
-                                    type: "image_url",
-                                    image_url: { url: magnifiedImageDataUrl }
-                                }
-                            ]
+                            content: messageContent
                         }
                     ]
                 });
@@ -468,7 +614,7 @@
                 const analysis = analyzeCompletion.content;
                 conversationHistory.push({
                     role: "user",
-                    content: `Analyze the object at position ${relativeX}%, ${relativeY}% of the scene.`
+                    content: `Analyze the object at position ${position.relativeX}%, ${position.relativeY}% of the scene microscopically.`
                 });
                 conversationHistory.push({
                     role: "assistant",
@@ -495,6 +641,7 @@
                 console.error("Error analyzing and generating microscopic view:", error);
                 loadingText.textContent = "Error: " + error.message;
                 isGenerating = false;
+                showError("Microscopic view generation failed: " + error.message);
                 setTimeout(() => {
                     loading.style.display = "none";
                 }, 2000);
