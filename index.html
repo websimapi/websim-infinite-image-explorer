@@ -290,23 +290,9 @@
             loadingText.textContent = "Analyzing...";
             
             try {
-                // Set up canvas for capturing the magnified area
-                const glassDiameter = magnifyingGlass.offsetWidth;
-                canvas.width = glassDiameter;
-                canvas.height = glassDiameter;
-                
-                // Draw the scene image to the canvas
-                ctx.drawImage(
-                    sceneImage,
-                    x - glassDiameter / (2 * zoomScale),
-                    y - glassDiameter / (2 * zoomScale),
-                    glassDiameter / zoomScale,
-                    glassDiameter / zoomScale,
-                    0, 0, glassDiameter, glassDiameter
-                );
-                
-                // Convert canvas to data URL
-                const dataUrl = canvas.toDataURL('image/png');
+                // Calculate relative position in the image (as percentages)
+                const relativeX = (x / window.innerWidth * 100).toFixed(1);
+                const relativeY = (y / window.innerHeight * 100).toFixed(1);
                 
                 // Analyze the image with LLM
                 loadingText.textContent = "Analyzing object...";
@@ -315,16 +301,7 @@
                         ...conversationHistory,
                         {
                             role: "user",
-                            content: [
-                                {
-                                    type: "text",
-                                    text: "Analyze this magnified portion of the scene. What object am I looking at? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present."
-                                },
-                                {
-                                    type: "image_url",
-                                    image_url: { url: dataUrl }
-                                }
-                            ]
+                            content: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. Based on the scene description, what object am I likely looking at in this position? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
                         }
                     ]
                 });
@@ -332,7 +309,7 @@
                 const analysis = analyzeCompletion.content;
                 conversationHistory.push({
                     role: "user",
-                    content: "Analyze this magnified portion of the scene."
+                    content: `Analyze the object at position ${relativeX}%, ${relativeY}% of the scene.`
                 });
                 conversationHistory.push({
                     role: "assistant",
@@ -375,4 +352,3 @@
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-
