@@ -158,6 +158,13 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        
+        #capture-canvas {
+            position: absolute;
+            top: -9999px;
+            left: -9999px;
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
@@ -186,6 +193,9 @@
             <div class="spinner"></div>
             <span id="loading-text">Generating scene...</span>
         </div>
+        
+        <!-- Add hidden canvas for capturing the magnified area -->
+        <canvas id="capture-canvas"></canvas>
     </div>
     
     <script>
@@ -202,6 +212,8 @@
         const analysisPopup = document.getElementById('analysis-popup');
         const analysisText = document.getElementById('analysis-text');
         const closeAnalysis = document.getElementById('close-analysis');
+        const captureCanvas = document.getElementById('capture-canvas');
+        const ctx = captureCanvas.getContext('2d');
         
         // State
         let currentScene = '';
@@ -319,6 +331,42 @@
             magnifiedContent.style.backgroundPosition = `${posX}px ${posY}px`;
         }
         
+        // Capture the circular magnified area
+        function captureMagnifiedArea() {
+            const glassDiameter = magnifyingGlass.offsetWidth;
+            
+            // Set canvas size to match the magnifying glass
+            captureCanvas.width = glassDiameter;
+            captureCanvas.height = glassDiameter;
+            
+            // Clear previous content
+            ctx.clearRect(0, 0, glassDiameter, glassDiameter);
+            
+            // Create a circular clipping path
+            ctx.beginPath();
+            ctx.arc(glassDiameter/2, glassDiameter/2, glassDiameter/2, 0, Math.PI * 2);
+            ctx.closePath();
+            ctx.clip();
+            
+            // Calculate source position and dimensions
+            const sourceX = currentMouseX - glassDiameter/2/zoomScale;
+            const sourceY = currentMouseY - glassDiameter/2/zoomScale;
+            const sourceWidth = glassDiameter/zoomScale;
+            const sourceHeight = glassDiameter/zoomScale;
+            
+            // Draw the image portion
+            ctx.drawImage(
+                sceneImage,
+                Math.max(0, sourceX), Math.max(0, sourceY),
+                Math.min(sourceWidth, sceneImage.width - sourceX), 
+                Math.min(sourceHeight, sceneImage.height - sourceY),
+                0, 0, glassDiameter, glassDiameter
+            );
+            
+            // Return the data URL
+            return captureCanvas.toDataURL('image/png');
+        }
+        
         // Analyze current view without showing microscopic image (left click)
         async function analyzeCurrentView(x, y) {
             isGenerating = true;
@@ -326,6 +374,9 @@
             loadingText.textContent = "Analyzing...";
             
             try {
+                // Capture the magnified area
+                const magnifiedImageDataUrl = captureMagnifiedArea();
+                
                 // Calculate relative position in the image (as percentages)
                 const relativeX = (x / window.innerWidth * 100).toFixed(1);
                 const relativeY = (y / window.innerHeight * 100).toFixed(1);
@@ -336,7 +387,16 @@
                         ...conversationHistory,
                         {
                             role: "user",
-                            content: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. Based on the scene description, what object am I likely looking at in this position? Provide a brief analysis.`
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. What object am I looking at in this magnified view? Provide a brief analysis of what you see.`
+                                },
+                                {
+                                    type: "image_url",
+                                    image_url: { url: magnifiedImageDataUrl }
+                                }
+                            ]
                         }
                     ]
                 });
@@ -370,13 +430,16 @@
             }
         }
         
-        // Take a snapshot of the magnified area and analyze it
+        // Take a snapshot of the magnified area and analyze it with microscopic view
         async function analyzeAndGenerateMicroscopicView(x, y) {
             isGenerating = true;
             loading.style.display = "flex";
             loadingText.textContent = "Analyzing...";
             
             try {
+                // Capture the magnified area
+                const magnifiedImageDataUrl = captureMagnifiedArea();
+                
                 // Calculate relative position in the image (as percentages)
                 const relativeX = (x / window.innerWidth * 100).toFixed(1);
                 const relativeY = (y / window.innerHeight * 100).toFixed(1);
@@ -388,7 +451,16 @@
                         ...conversationHistory,
                         {
                             role: "user",
-                            content: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. Based on the scene description, what object am I likely looking at in this position? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. What object am I looking at in this magnified view? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
+                                },
+                                {
+                                    type: "image_url",
+                                    image_url: { url: magnifiedImageDataUrl }
+                                }
+                            ]
                         }
                     ]
                 });
