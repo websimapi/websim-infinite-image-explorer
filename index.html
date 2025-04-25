@@ -122,6 +122,29 @@
             z-index: 30;
         }
         
+        #analysis-popup {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            max-width: 300px;
+            z-index: 25;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
+            display: none;
+        }
+        
+        #close-analysis {
+            position: absolute;
+            top: 5px;
+            right: 5px;
+            background: none;
+            border: none;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        
         .spinner {
             width: 50px;
             height: 50px;
@@ -154,6 +177,11 @@
             <button id="close-button">×</button>
         </div>
         
+        <div id="analysis-popup">
+            <button id="close-analysis">×</button>
+            <p id="analysis-text"></p>
+        </div>
+        
         <div id="loading">
             <div class="spinner"></div>
             <span id="loading-text">Generating scene...</span>
@@ -171,18 +199,24 @@
         const closeButton = document.getElementById('close-button');
         const loading = document.getElementById('loading');
         const loadingText = document.getElementById('loading-text');
+        const analysisPopup = document.getElementById('analysis-popup');
+        const analysisText = document.getElementById('analysis-text');
+        const closeAnalysis = document.getElementById('close-analysis');
         
         // State
         let currentScene = '';
         let zoomScale = 2;
         let isGenerating = false;
         let conversationHistory = [];
+        let currentMouseX = 0;
+        let currentMouseY = 0;
         
         // Initialize the app
         window.addEventListener('DOMContentLoaded', async () => {
             await generateInitialScene();
             setupMagnifyingGlass();
             setupCloseButton();
+            setupAnalysisPopup();
         });
         
         // Generate initial scene
@@ -239,26 +273,32 @@
             document.addEventListener('mousemove', (e) => {
                 if (isGenerating) return;
                 
-                const x = e.clientX;
-                const y = e.clientY;
+                currentMouseX = e.clientX;
+                currentMouseY = e.clientY;
                 
                 // Position the magnifying glass
-                magnifyingGlass.style.left = `${x}px`;
-                magnifyingGlass.style.top = `${y}px`;
+                magnifyingGlass.style.left = `${currentMouseX}px`;
+                magnifyingGlass.style.top = `${currentMouseY}px`;
                 
                 // Create magnified content
-                updateMagnifiedContent(x, y);
+                updateMagnifiedContent(currentMouseX, currentMouseY);
             });
             
+            // Handle different click actions
             document.addEventListener('click', async (e) => {
                 if (isGenerating || microscopicViewContainer.style.display === 'flex') return;
                 
-                // Get the current magnified view
-                const x = e.clientX;
-                const y = e.clientY;
+                // Left click - analyze only
+                await analyzeCurrentView(currentMouseX, currentMouseY);
+            });
+            
+            document.addEventListener('contextmenu', async (e) => {
+                e.preventDefault(); // Prevent context menu
                 
-                // Take a snapshot and analyze
-                await analyzeAndGenerateMicroscopicView(x, y);
+                if (isGenerating || microscopicViewContainer.style.display === 'flex') return;
+                
+                // Right click - analyze and show microscopic view
+                await analyzeAndGenerateMicroscopicView(currentMouseX, currentMouseY);
             });
         }
         
@@ -279,6 +319,57 @@
             magnifiedContent.style.backgroundPosition = `${posX}px ${posY}px`;
         }
         
+        // Analyze current view without showing microscopic image (left click)
+        async function analyzeCurrentView(x, y) {
+            isGenerating = true;
+            loading.style.display = "flex";
+            loadingText.textContent = "Analyzing...";
+            
+            try {
+                // Calculate relative position in the image (as percentages)
+                const relativeX = (x / window.innerWidth * 100).toFixed(1);
+                const relativeY = (y / window.innerHeight * 100).toFixed(1);
+                
+                // Analyze the image at position with LLM
+                const analyzeCompletion = await websim.chat.completions.create({
+                    messages: [
+                        ...conversationHistory,
+                        {
+                            role: "user",
+                            content: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. Based on the scene description, what object am I likely looking at in this position? Provide a brief analysis.`
+                        }
+                    ]
+                });
+                
+                const analysis = analyzeCompletion.content;
+                conversationHistory.push({
+                    role: "user",
+                    content: `Analyze the object at position ${relativeX}%, ${relativeY}% of the scene.`
+                });
+                conversationHistory.push({
+                    role: "assistant",
+                    content: analysis
+                });
+                
+                // Show analysis popup
+                analysisText.textContent = analysis;
+                analysisPopup.style.display = "block";
+                analysisPopup.style.left = `${x + 20}px`;
+                analysisPopup.style.top = `${y - 20}px`;
+                
+                loading.style.display = "none";
+                isGenerating = false;
+                
+            } catch (error) {
+                console.error("Error analyzing view:", error);
+                loadingText.textContent = "Error: " + error.message;
+                isGenerating = false;
+                setTimeout(() => {
+                    loading.style.display = "none";
+                }, 2000);
+            }
+        }
+        
         // Take a snapshot of the magnified area and analyze it
         async function analyzeAndGenerateMicroscopicView(x, y) {
             isGenerating = true;
@@ -286,120 +377,47 @@
             loadingText.textContent = "Analyzing...";
             
             try {
-                // Get relative coordinates (as percentage of image dimensions)
-                const relX = Math.round((x / window.innerWidth) * 100);
-                const relY = Math.round((y / window.innerHeight) * 100);
+                // Calculate relative position in the image (as percentages)
+                const relativeX = (x / window.innerWidth * 100).toFixed(1);
+                const relativeY = (y / window.innerHeight * 100).toFixed(1);
                 
-                // Describe the area being magnified
-                const areaDescription = `the area located at approximately ${relX}% from the left and ${relY}% from the top of the image`;
-                
-                // Instead of using canvas, we'll describe the position and use the original scene description
+                // Analyze the image with LLM
                 loadingText.textContent = "Analyzing object...";
-                
-                // First attempt - try with direct approach
-                try {
-                    const analyzeCompletion = await websim.chat.completions.create({
-                        messages: [
-                            ...conversationHistory,
-                            {
-                                role: "user",
-                                content: `I'm examining ${areaDescription} of the scene you described. Based on your detailed scene description, what object am I likely looking at in this position? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
-                            }
-                        ]
-                    });
-                    
-                    const analysis = analyzeCompletion.content;
-                    conversationHistory.push({
-                        role: "user",
-                        content: `Analyze the magnified portion at ${areaDescription}.`
-                    });
-                    conversationHistory.push({
-                        role: "assistant",
-                        content: analysis
-                    });
-                    
-                    // Generate microscopic view based on analysis
-                    loadingText.textContent = "Generating microscopic view...";
-                    const microscopicResult = await websim.imageGen({
-                        prompt: `Microscopic extreme close-up view of ${analysis}. Scientific, detailed, high magnification.`,
-                        aspect_ratio: "1:1"
-                    });
-                    
-                    // Display the microscopic view
-                    microscopicImage.onload = () => {
-                        loading.style.display = "none";
-                        microscopicViewContainer.style.display = "flex";
-                        isGenerating = false;
-                    };
-                    microscopicImage.src = microscopicResult.url;
-                    microscopicDescription.textContent = analysis;
-                    
-                } catch (error) {
-                    console.error("First attempt failed:", error);
-                    
-                    // Fallback approach - try with more context about the original scene
-                    try {
-                        const fallbackCompletion = await websim.chat.completions.create({
-                            messages: [
-                                {
-                                    role: "system",
-                                    content: "You are a microscopy expert who can analyze described areas in images and explain what they would look like under high magnification."
-                                },
-                                {
-                                    role: "user",
-                                    content: `The scene is: ${currentScene}\n\nI'm looking at ${areaDescription} of this scene. What object am I likely looking at? Describe in detail what this would look like under a microscope with extreme magnification. Include textures, structures, cells, or microscopic elements.`
-                                }
-                            ]
-                        });
-                        
-                        const analysis = fallbackCompletion.content;
-                        conversationHistory.push({
+                const analyzeCompletion = await websim.chat.completions.create({
+                    messages: [
+                        ...conversationHistory,
+                        {
                             role: "user",
-                            content: `Analyze the magnified portion at ${areaDescription}.`
-                        });
-                        conversationHistory.push({
-                            role: "assistant",
-                            content: analysis
-                        });
-                        
-                        // Generate microscopic view based on analysis
-                        loadingText.textContent = "Generating microscopic view...";
-                        const microscopicResult = await websim.imageGen({
-                            prompt: `Microscopic extreme close-up view of ${analysis}. Scientific, detailed, high magnification.`,
-                            aspect_ratio: "1:1"
-                        });
-                        
-                        // Display the microscopic view
-                        microscopicImage.onload = () => {
-                            loading.style.display = "none";
-                            microscopicViewContainer.style.display = "flex";
-                            isGenerating = false;
-                        };
-                        microscopicImage.src = microscopicResult.url;
-                        microscopicDescription.textContent = analysis;
-                    } catch (secondError) {
-                        // If all else fails, use a generic microscopic view based on the scene
-                        console.error("Second attempt failed:", secondError);
-                        
-                        try {
-                            const genericAnalysis = `a small portion of the scene (${currentScene.substring(0, 100)}...)`;
-                            const microscopicResult = await websim.imageGen({
-                                prompt: `Microscopic extreme close-up view of something in this scene. Scientific, detailed, high magnification.`,
-                                aspect_ratio: "1:1"
-                            });
-                            
-                            microscopicImage.onload = () => {
-                                loading.style.display = "none";
-                                microscopicViewContainer.style.display = "flex";
-                                isGenerating = false;
-                            };
-                            microscopicImage.src = microscopicResult.url;
-                            microscopicDescription.textContent = "A microscopic view of this portion of the scene, revealing details invisible to the naked eye.";
-                        } catch (finalError) {
-                            throw new Error("All attempts failed: " + finalError.message);
+                            content: `I'm examining a part of the scene at approximately ${relativeX}% from the left and ${relativeY}% from the top of the image. Based on the scene description, what object am I likely looking at in this position? Describe what this would look like under a microscope with extreme magnification. Be detailed about textures, structures, cells, or microscopic elements that might be present.`
                         }
-                    }
-                }
+                    ]
+                });
+                
+                const analysis = analyzeCompletion.content;
+                conversationHistory.push({
+                    role: "user",
+                    content: `Analyze the object at position ${relativeX}%, ${relativeY}% of the scene.`
+                });
+                conversationHistory.push({
+                    role: "assistant",
+                    content: analysis
+                });
+                
+                // Generate microscopic view based on analysis
+                loadingText.textContent = "Generating microscopic view...";
+                const microscopicResult = await websim.imageGen({
+                    prompt: `Microscopic extreme close-up view of ${analysis}. Scientific, detailed, high magnification.`,
+                    aspect_ratio: "1:1"
+                });
+                
+                // Display the microscopic view
+                microscopicImage.onload = () => {
+                    loading.style.display = "none";
+                    microscopicViewContainer.style.display = "flex";
+                    isGenerating = false;
+                };
+                microscopicImage.src = microscopicResult.url;
+                microscopicDescription.textContent = analysis;
                 
             } catch (error) {
                 console.error("Error analyzing and generating microscopic view:", error);
@@ -415,6 +433,13 @@
         function setupCloseButton() {
             closeButton.addEventListener('click', () => {
                 microscopicViewContainer.style.display = "none";
+            });
+        }
+        
+        // Setup analysis popup close button
+        function setupAnalysisPopup() {
+            closeAnalysis.addEventListener('click', () => {
+                analysisPopup.style.display = "none";
             });
         }
     </script>
